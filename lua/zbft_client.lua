@@ -15,38 +15,45 @@ function ZB.ChatError(text)
 	chat.AddText(Color(255,20,147,255), "[ZB]", Color(208,31,60,255), " Error: ", text)
 end
 
-function ZB.Welcome()
+function ZB.Init()
+	MENU:Initialize()
+	MENU:InitializeRemote()
+	
+	MENU.RemoteBrowser:BeginDirLoad()
+	net.Start("ZBCL_ClientInit")
+	net.SendToServer()
+	
+	file.CreateDir("zbft")
+	
 	ZB.ChatText("Loaded")
 	ZB.ChatText("Bind a key to +zbft_menu to access the menu")
 end
 
-function ZB.RequestDir(dir)
-	ZB.ChatText("Requesting directory: " .. dir)
+net.Receive("ZBSV_InitData", function(len)
+	if net.ReadBit() == 1 then -- Error
+		local errorMsg = net.ReadString()
+		Derma_Message("An error occured while loading ZB:\n" .. errorMsg, "Error", "OK")
+		return
+	end
+		
+	MENU.RemoteBrowser:SetCurrentDir(net.ReadString())-- Base directory
+	
+	-- TODO: Better interface for drive letters
+	local numDrives = net.ReadUInt(6)
+	for i=1,numDrives do
+		print("Drive Letter: " .. net.ReadString())
+	end
+end)
 
-	net.Start("ZB_Request")
-		net.WriteBit(false)
-		net.WriteString(dir)
-	net.SendToServer()
-end
-
-function ZB.RequestFile(name)
-	ZB.ChatText("Requesting file: " .. name)
-
-	net.Start("ZB_Request")
-		net.WriteBit(true)
-		net.WriteString(name)
-	net.SendToServer()
-end
-
-if IsValid(LocalPlayer()) then
-	ZB.Welcome()
-else
-	hook.Add("InitPostEntity", "PrintZBLoaded", ZB.Welcome)
-end
+/*
+ * ========================
+ *      Container GUI
+ * ========================
+*/
 
 function MENU:Show()
 	if not self.Base then self:Initialize() end
-	if not self.Remote_Panel then self:Initialize_Remote() end
+	if not self.RemoteBrowser then self:InitializeRemote() end
 
 	self.Base:SetVisible(true)
 	self.Base:MakePopup()
@@ -79,10 +86,16 @@ function MENU:Initialize()
 	self.BaseTabs:SetSize(Width, Height)
 end
 
-function MENU:Initialize_Remote()
-	self.Remote_Panel = vgui.Create("DFileBrowser")
-	self.BaseTabs:AddSheet("Remote Files", self.Remote_Panel, "icon16/server_connect.png", false, false, "Browse files on the host")
+function MENU:InitializeRemote()
+	self.RemoteBrowser = vgui.Create("DFileBrowser")
+	self.BaseTabs:AddSheet("Remote Files", self.RemoteBrowser, "icon16/server_connect.png", false, false, "Browse files on the host")
 end
+
+/*
+ * ========================
+ *     File Browser GUI
+ * ========================
+*/
 
 local BROWSER = {}
 
@@ -97,7 +110,9 @@ function BROWSER:Init()
 	current:DockMargin(8, 2, 8, 2)
 	current:SetText("C:\\")
 	current.OnEnter = function(entry)
-		ZB.ChatError("Changing directory manually not yet implemented")
+		ZB.ChatText("Getting file list...")
+		ZB.RequestDir(self:GetCurrentDir())
+		self:BeginDirLoad()
 	end
 	
 	local fileList = vgui.Create("DListView", self)
@@ -142,6 +157,14 @@ function BROWSER:Init()
 		ZB.RequestDir(self:GetCurrentDir())
 		self:BeginDirLoad()
 	end
+	
+	local container = vgui.Create("DPanel")
+	self.ProgContainer = container
+	container:SetSize(400, ScrH() - 32)
+	container:AlignRight(16)
+	container:AlignTop(16)
+	container.Paint = function() end
+
 end
 
 function BROWSER:BeginDirLoad()
@@ -230,14 +253,121 @@ function BROWSER:ClearList()
 	self.FileList:Clear()
 end
 
+function BROWSER:CreateProgress(name, size)
+	local bar = vgui.Create("ZBFileProgress", self.ProgContainer)
+	bar:StartDownloading(name, size)
+	self.ProgContainer:InvalidateLayout()
+	return bar
+end
+
+function BROWSER:RemoveProgress(bar)
+	bar:Remove()
+	self:InvalidateLayout()
+end
+
 vgui.Register("DFileBrowser", BROWSER, "DPanelList")
 
-net.Receive("ZB_DirList", function(len)
-	local browser = MENU.Remote_Panel
+/*
+ * ========================
+ *    Progress Bar GUI
+ * ========================
+*/
+
+local PROG = {}
+
+surface.CreateFont("ZBFTLarge",
+{
+    font         = "Helvetica",
+    size         = 19,
+    antialias    = true,
+    weight       = 800
+})
+
+local matProgressCog    = Material("gui/progress_cog.png", "nocull smooth mips")
+
+function PROG:Init()
+    self.Label = self:Add("DLabel")
+    self.Label:SetText("Starting download...")
+    self.Label:SetFont("ZBFTLarge")
+    self.Label:SetTextColor(Color(255, 255, 255, 200))
+    self.Label:Dock(LEFT)
+    self.Label:DockMargin(16, 10, 16, 8)
+    self.Label:SetContentAlignment(4)
+	self.Label:SizeToContents()
+
+    self.ProgressLabel = self:Add("DLabel")
+    self.ProgressLabel:SetText("Unknown Size")
+    self.ProgressLabel:SetContentAlignment(7)
+    self.ProgressLabel:SetVisible(false )
+    self.ProgressLabel:SetTextColor(Color(255, 255, 255, 50))
+    self.ProgressLabel:Dock(RIGHT)
+	self.ProgressLabel:DockMargin(16, 10, 16, 8)
+	self.ProgressLabel:SizeToContents()
+	
+    self.Progress = 0     
+end
+
+function PROG:PerformLayout()
+    self:SetSize(400, 35)
+	self:Dock(TOP)
+	self:DockMargin(0, 0, 0, 10)
+end
+
+function PROG:Spawn()
+    self:PerformLayout()
+end
+
+function PROG:StartDownloading(title, size)
+    self.Label:SetText(title)
+    self.ProgressLabel:Show()
+
+    self:UpdateProgress(0, size)
+end
+
+function PROG:Paint()
+    DisableClipping(true)
+        draw.RoundedBox(4, -1, -1, self:GetWide()+2, self:GetTall()+2, Color( 0, 0, 0, 255 ))
+    DisableClipping(false)
+
+	if self.Progress > 0 then
+		draw.RoundedBox(4, 0, 0, self.Progress * self:GetWide(), self:GetTall(), Color( 50, 50, 50, 255 ))
+	end
+    
+    surface.SetDrawColor(0, 0, 0, 100)
+    surface.SetMaterial(matProgressCog)
+    surface.DrawTexturedRectRotated(0, 32, 64 * 4, 64 * 4, SysTime() * -20)
+end
+
+function PROG:UpdateProgress(downloaded, expected)
+    self.Progress = downloaded / expected
+    self.ProgressLabel:SetText(string.NiceSize(downloaded) .. " of " .. string.NiceSize(expected))
+	self.ProgressLabel:SizeToContents()
+end
+
+vgui.Register("ZBFileProgress", PROG, "DPanel")
+
+/*
+ * ========================
+ *    Directory Listing
+ * ========================
+*/
+
+function ZB.RequestDir(dir)
+	ZB.ChatText("Requesting directory: " .. dir)
+
+	net.Start("ZBCL_Request")
+		net.WriteBit(false)
+		net.WriteString(dir)
+	net.SendToServer()
+end
+
+
+net.Receive("ZBSV_DirList", function(len)
+	local browser = MENU.RemoteBrowser
 	
 	if net.ReadBit() == 1 then -- There's been an error
 		local errorMsg = net.ReadString()
-		Derma_Message("And error occurred while loading the directory:\n" .. errorMsg, "Error", "OK")
+		Derma_Message("An error occurred while loading the directory:\n" .. errorMsg, "Error", "OK")
 		browser:EndDirLoad()
 		return
 	end
@@ -260,12 +390,35 @@ net.Receive("ZB_DirList", function(len)
 	browser:EndDirLoad()
 end)
 
+/*
+ * ========================
+ *     File transfers
+ * ========================
+*/
+
 ZB.Transfers = {}
 
+function ZB.RequestFile(name)
+	ZB.ChatText("Requesting file: " .. name)
+
+	net.Start("ZBCL_Request")
+		net.WriteBit(true)
+		net.WriteString(name)
+	net.SendToServer()
+end
+
+function ZB.RemoteToLocalName(name)
+	return string.GetFileFromFilename(name)
+end
+
 function ZB.BeginReceive(transferID, filename, size)
-	local handle = file.Open("shazbot.txt", "wb", "DATA") -- TODO: Get a proper local filename
 	
-	ZB.Transfers[transferID] = { filename = filename, localfile = "shazbot.txt", size = size, offset = 0, transferID = transferID, handle = handle }
+	local shortName = ZB.RemoteToLocalName(filename)
+	local handle = file.Open("zbft/" .. shortName .. ".txt", "wb", "DATA")
+	
+	local bar = MENU.RemoteBrowser:CreateProgress(shortName, size)
+	
+	ZB.Transfers[transferID] = { filename = filename, localfile = shortName, size = size, offset = 0, transferID = transferID, handle = handle, progressBar = bar }
 	
 	ZB.ChatText("Receiving " .. filename .. " from server (ID = " .. transferID .. ")")
 end
@@ -278,7 +431,11 @@ function ZB.ReceivedChunk(transferID, data, size)
 	
 	local progress = math.Round((transfer.offset / transfer.size) * 100, 2)
 	
+	transfer.progressBar:UpdateProgress(transfer.offset, transfer.size)
+	
 	ZB.ChatText("Receieved chunk of " .. size .. " bytes from server (ID = " .. transfer.transferID .. ", " .. progress .. "%)")
+	
+	ZB.AcknowledgeChunk(transferID)
 	
 	if transfer.offset == transfer.size then
 		ZB.EndReceive(transferID)
@@ -286,15 +443,23 @@ function ZB.ReceivedChunk(transferID, data, size)
 	end
 end
 
+function ZB.AcknowledgeChunk(transferID)
+	net.Start("ZBCL_ChunkAck")
+		net.WriteUInt(transferID, 16)
+	net.SendToServer()
+end
+
 function ZB.EndReceive(transferID)
 	local transfer = ZB.Transfers[transferID]
+	
+	MENU.RemoteBrowser:RemoveProgress(transfer.progressBar)
 	
 	transfer.handle:Close()
 	
 	ZB.Transfers[transferID] = nil
 end
 
-net.Receive("ZB_BeginFileStream", function(len)
+net.Receive("ZBSV_BeginFileStream", function(len)
 	local isError = net.ReadBit() == 1
 	
 	if isError then
@@ -312,7 +477,7 @@ net.Receive("ZB_BeginFileStream", function(len)
 	ZB.BeginReceive(transferID, filename, size)
 end)
 
-net.Receive("ZB_FileData", function(len)
+net.Receive("ZBSV_FileData", function(len)
 	local transferID = net.ReadUInt(16)
 	local isError = net.ReadBit() == 1
 	
@@ -328,3 +493,9 @@ net.Receive("ZB_FileData", function(len)
 	
 	ZB.ReceivedChunk(transferID, data, incoming)
 end)
+
+if IsValid(LocalPlayer()) then
+	ZB.Init()
+else
+	hook.Add("InitPostEntity", "PrintZBLoaded", ZB.Init)
+end

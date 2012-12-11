@@ -1,5 +1,7 @@
 local ZB = {}
 
+ZB.BaseDir = string.GetPathFromFilename(util.RelativePathToFull("gameinfo.txt"))
+
 function ZB.LogMessage(text)
 	MsgC(Color(255,20,147), "[ZB]")
 	MsgC(Color(255,255,255), " ", text, "\n")
@@ -9,12 +11,39 @@ ZB.LogMessage("Loading Server...")
 
 require("simpio")
 
-util.AddNetworkString("ZB_Request")
-util.AddNetworkString("ZB_DirList")
-util.AddNetworkString("ZB_BeginFileStream")
-util.AddNetworkString("ZB_FileData")
+util.AddNetworkString("ZBSV_DirList")
+util.AddNetworkString("ZBSV_BeginFileStream")
+util.AddNetworkString("ZBSV_FileData")
+util.AddNetworkString("ZBSV_InitData")
 
-net.Receive("ZB_Request", function(len, ply)
+util.AddNetworkString("ZBCL_Request")
+util.AddNetworkString("ZBCL_ChunkAck")
+util.AddNetworkString("ZBCL_ClientInit")
+
+net.Receive("ZBCL_ClientInit", function(len, ply)
+	local driveLetters = simpio.GetDriveLetters()
+	if not driveLetters then
+		net.Start("ZBSV_InitData")
+			net.WriteBit(true)
+			net.WriteString("Failed to get drive letters: " .. simpio.LastError())
+		net.Send(ply)
+		
+		return
+	end
+	
+	net.Start("ZBSV_InitData")
+		net.WriteBit(false)
+		net.WriteString(ZB.BaseDir) -- Write the base directory
+		net.WriteUInt(#driveLetters, 6)
+		for _,ltr in ipairs(driveLetters) do
+			net.WriteString(ltr) -- Horribly inefficient, but oh well
+		end
+	net.Send(ply)
+	
+	ZB.SendDir(ZB.BaseDir, ply)
+end)
+
+net.Receive("ZBCL_Request", function(len, ply)
 	local isFile = net.ReadBit() == 1
 	local name = net.ReadString()
 	if isFile then
@@ -29,15 +58,15 @@ net.Receive("ZB_Request", function(len, ply)
 end)
 
 function ZB.SendDir(dir, ply)
-	local result = simpio.listdir(dir)
+	local result = simpio.ListDir(dir)
 	
 	if not result then -- It's an error
-		net.Start("ZB_DirList")
+		net.Start("ZBSV_DirList")
 			net.WriteBit(true)
-			net.WriteString(string.Trim(simpio.lasterror()))
+			net.WriteString(string.Trim(simpio.LastError()))
 		net.Send(ply)
 	else
-		net.Start("ZB_DirList")
+		net.Start("ZBSV_DirList")
 			net.WriteBit(false)
 			net.WriteString(dir)
 			net.WriteUInt(#result, 16)
@@ -71,28 +100,32 @@ ZB.TransferID = 1
 ZB.Transfers = {}
 
 function ZB.StreamFile(filename, ply)
-	local size = simpio.filesize(filename)
+	local size = simpio.FileSize(filename)
 	
 	if not size then -- Error occurred
-		net.Start("ZB_BeginFileStream")
+		net.Start("ZBSV_BeginFileStream")
 			net.WriteBit(true)
 			net.WriteString(filename)
-			net.WriteString(string.Trim(simpio.lasterror()))
+			net.WriteString(string.Trim(simpio.LastError()))
 		net.Send(ply)
 		
 		ZB.LogMessage("An error occured while sending the file (Ply = " .. ply:Nick() .. ", Dir = " .. filename .. ")")
 		return
 	end
 	
-	net.Start("ZB_BeginFileStream")
+	net.Start("ZBSV_BeginFileStream")
 		net.WriteBit(false)
 		net.WriteUInt(ZB.TransferID, 16)
 		net.WriteString(filename)
 		net.WriteUInt(size, 32)
 	net.Send(ply)
 	
-	table.insert(ZB.Transfers, { filename = filename, size = size, offset = 0, id = ZB.TransferID, player = ply })
+	local tbl = { filename = filename, size = size, offset = 0, id = ZB.TransferID, player = ply }
+	table.insert(ZB.Transfers, ZB.TransferID, tbl)
 	ZB.TransferID = ZB.TransferID + 1
+	
+	-- Start transfer
+	ZB.SendChunk(tbl)
 end
 
 function ZB.SendChunk(transfer)
@@ -107,13 +140,13 @@ function ZB.SendChunk(transfer)
 	end
 	
 	local send = math.Min(remaining, ZB.MaxChunkSize)
-	local data, numRead = simpio.read(transfer.filename, transfer.offset, send) -- Read send bytes starting from transfer.offset
+	local data, numRead = simpio.Read(transfer.filename, transfer.offset, send) -- Read send bytes starting from transfer.offset
 	
 	if not data then -- Error occurred
-		net.Start("ZB_FileData")
+		net.Start("ZBSV_FileData")
 			net.WriteUInt(transfer.id, 16)
 			net.WriteBit(true)
-			net.WriteString(string.Trim(simpio.lasterror()))
+			net.WriteString(string.Trim(simpio.LastError()))
 		net.Send(transfer.player)
 		
 		ZB.LogMessage("An error occured while reading data (Ply = " .. transfer.player:Nick() .. ", TID = " .. transfer.id .. ")")
@@ -122,7 +155,7 @@ function ZB.SendChunk(transfer)
 	
 	ZB.LogMessage("Sending " .. numRead .. " byte chunk to " .. transfer.player:Nick() .. " starting from " .. transfer.offset)
 	
-	net.Start("ZB_FileData")
+	net.Start("ZBSV_FileData")
 		net.WriteUInt(transfer.id, 16)
 		net.WriteBit(false)
 		net.WriteUInt(numRead, 16)
@@ -134,13 +167,11 @@ function ZB.SendChunk(transfer)
 	return true
 end
 
-timer.Create("SendChunks", 1, 0, function()
-	for k,tbl in ipairs(ZB.Transfers) do
-		for i = 1, ZB.ChunksPerTick do
-			if not ZB.SendChunk(tbl) then -- Completed or errored, so remove from transfers
-				table.remove(ZB.Transfers, k)
-				continue
-			end
-		end
+net.Receive("ZBCL_ChunkAck", function(len)
+	local transferID = net.ReadUInt(16)
+	
+	if not ZB.SendChunk(ZB.Transfers[transferID]) then
+		ZB.LogMessage("Transfer ID = " .. transferID .. " completed")
+		ZB.Transfers[transferID] = nil
 	end
-end) 
+end)

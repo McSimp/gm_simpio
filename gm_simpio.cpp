@@ -176,6 +176,36 @@ int ListDirectory(lua_State* state)
 	return 1;
 }
 
+int GetDriveLetters(lua_State* state)
+{
+	DWORD mask = GetLogicalDrives();
+	if(mask == 0)
+	{
+		LUA->PushBool(false);
+		return 1;
+	}
+
+	LUA->CreateTable();
+
+	char driveLetter[] = { "A" };
+	int i = 1;
+	while(mask)
+	{
+		if(mask & 1)
+		{
+			LUA->PushNumber(i);
+			LUA->PushString(driveLetter);
+			LUA->SetTable(-3);
+			i++;
+		}
+
+		driveLetter[0]++;
+		mask >>= 1;
+	}
+	
+	return 1;
+}
+
 GMOD_MODULE_OPEN()
 {
 	// Create table for module functions on the stack
@@ -184,24 +214,28 @@ GMOD_MODULE_OPEN()
 
 	LUA->CreateTable();
 
-		LUA->PushString("read");
+		LUA->PushString("Read");
 		LUA->PushCFunction(ReadFileOffset);
 		LUA->SetTable(-3);
 
-		LUA->PushString("filesize");
+		LUA->PushString("FileSize");
 		LUA->PushCFunction(FileSize);
 		LUA->SetTable(-3);
 
-		LUA->PushString("listdir");
+		LUA->PushString("ListDir");
 		LUA->PushCFunction(ListDirectory);
 		LUA->SetTable(-3);
 
-		LUA->PushString("write");
+		LUA->PushString("Write");
 		LUA->PushCFunction(WriteFile);
 		LUA->SetTable(-3);
 
-		LUA->PushString("lasterror");
+		LUA->PushString("LastError");
 		LUA->PushCFunction(PushWinError);
+		LUA->SetTable(-3);
+
+		LUA->PushString("GetDriveLetters");
+		LUA->PushCFunction(GetDriveLetters);
 		LUA->SetTable(-3);
 
 	LUA->SetTable(-3); // Set our new table as the value for simpio in glob
