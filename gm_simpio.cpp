@@ -99,7 +99,7 @@ int PushWinError(lua_State* state)
 
 unsigned WindowsTickToUnixSeconds(long long windowsTicks)
 {
-     return (unsigned)(windowsTicks / WINDOWS_TICK - SEC_TO_UNIX_EPOCH);
+	return (unsigned)(windowsTicks / WINDOWS_TICK - SEC_TO_UNIX_EPOCH);
 }
 
 int ListDirectory(lua_State* state)
@@ -108,66 +108,66 @@ int ListDirectory(lua_State* state)
 	string directory(dirName);
 
 	HANDLE dir;
-    WIN32_FIND_DATA file_data;
+	WIN32_FIND_DATA file_data;
 
 	if((dir = FindFirstFile((directory + "/*").c_str(), &file_data)) == INVALID_HANDLE_VALUE)
 	{
 		LUA->PushBool(false);
-    	return 1; // Error occured, called simpio.lasterror
+		return 1; // Error occured, called simpio.lasterror
 	}
 
 	LUA->CreateTable();
-	
-	int idx = 1;
-    do
-	{
-    	const string file_name = file_data.cFileName;
-    	const bool is_directory = (file_data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
 
-    	if(file_name[0] == '.')
-    		continue;
+	int idx = 1;
+	do
+	{
+		const string file_name = file_data.cFileName;
+		const bool is_directory = (file_data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+
+		if(file_name[0] == '.')
+			continue;
 
 		LUA->PushNumber(idx);
-			LUA->CreateTable();
+		LUA->CreateTable();
 
-			LUA->PushString("isDir");
-			LUA->PushBool(is_directory);
-			LUA->SetTable(-3);
-
-			LUA->PushString("name");
-			LUA->PushString(file_name.c_str());
-			LUA->SetTable(-3);
-
-			if(!is_directory)
-			{
-				//WIN32_FILE_ATTRIBUTE_DATA fad;
-				//if(!GetFileAttributesEx(file_name.c_str(), GetFileExInfoStandard, &fad))
-				//{
-				//	LUA->Pop(3); // Pop the inner table, index, and outer table
-				//	//PushWinError(state);
-				//	LUA->PushString("Fucking file attributes");
-				//	return 1;
-				//}
-
-				LARGE_INTEGER size;
-				size.HighPart = file_data.nFileSizeHigh;
-				size.LowPart = file_data.nFileSizeLow;
-				LUA->PushString("size");
-				LUA->PushNumber(size.QuadPart);
-				LUA->SetTable(-3);
-
-				LARGE_INTEGER time;
-				time.HighPart = file_data.ftLastWriteTime.dwHighDateTime;
-				time.LowPart = file_data.ftLastWriteTime.dwLowDateTime;
-				int unixTime = WindowsTickToUnixSeconds(time.QuadPart);
-				LUA->PushString("mod");
-				LUA->PushNumber(unixTime);
-				LUA->SetTable(-3);
-			}
+		LUA->PushString("isDir");
+		LUA->PushBool(is_directory);
 		LUA->SetTable(-3);
-		
+
+		LUA->PushString("name");
+		LUA->PushString(file_name.c_str());
+		LUA->SetTable(-3);
+
+		if(!is_directory)
+		{
+			//WIN32_FILE_ATTRIBUTE_DATA fad;
+			//if(!GetFileAttributesEx(file_name.c_str(), GetFileExInfoStandard, &fad))
+			//{
+			//	LUA->Pop(3); // Pop the inner table, index, and outer table
+			//	//PushWinError(state);
+			//	LUA->PushString("Fucking file attributes");
+			//	return 1;
+			//}
+
+			LARGE_INTEGER size;
+			size.HighPart = file_data.nFileSizeHigh;
+			size.LowPart = file_data.nFileSizeLow;
+			LUA->PushString("size");
+			LUA->PushNumber(size.QuadPart);
+			LUA->SetTable(-3);
+
+			LARGE_INTEGER time;
+			time.HighPart = file_data.ftLastWriteTime.dwHighDateTime;
+			time.LowPart = file_data.ftLastWriteTime.dwLowDateTime;
+			int unixTime = WindowsTickToUnixSeconds(time.QuadPart);
+			LUA->PushString("mod");
+			LUA->PushNumber(unixTime);
+			LUA->SetTable(-3);
+		}
+		LUA->SetTable(-3);
+
 		idx++;
-    } 
+	} 
 	while(FindNextFile(dir, &file_data));
 
 	CloseHandle(dir);
@@ -183,7 +183,7 @@ GMOD_MODULE_OPEN()
 	LUA->PushString("simpio");
 
 	LUA->CreateTable();
-	
+
 		LUA->PushString("read");
 		LUA->PushCFunction(ReadFileOffset);
 		LUA->SetTable(-3);
