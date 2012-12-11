@@ -23,8 +23,18 @@ end
 function ZB.RequestDir(dir)
 	ZB.ChatText("Requesting directory: " .. dir)
 
-	net.Start("ZB_RequestDir")
+	net.Start("ZB_Request")
+		net.WriteBit(false)
 		net.WriteString(dir)
+	net.SendToServer()
+end
+
+function ZB.RequestFile(name)
+	ZB.ChatText("Requesting file: " .. name)
+
+	net.Start("ZB_Request")
+		net.WriteBit(true)
+		net.WriteString(name)
 	net.SendToServer()
 end
 
@@ -109,7 +119,7 @@ function BROWSER:Init()
 			ZB.RequestDir(self:GetRelativeDir(name))
 			self:BeginDirLoad()
 		else
-			ZB.ChatError("Downloading files not yet implemented")
+			ZB.RequestFile(self:GetRelativeFile(name))
 		end
 	end
 	
@@ -195,6 +205,10 @@ function BROWSER:GetRelativeDir(name)
 	return self:GetCurrentDir() .. name .. "\\"
 end
 
+function BROWSER:GetRelativeFile(name)
+	return self:GetCurrentDir() .. name
+end
+
 function BROWSER:AddFolder(name)
 	table.insert(self.FileList.Dirs, name)
 end
@@ -224,7 +238,7 @@ net.Receive("ZB_DirList", function(len)
 	if net.ReadBit() == 1 then -- There's been an error
 		local errorMsg = net.ReadString()
 		Derma_Message("And error occurred while loading the directory:\n" .. errorMsg, "Error", "OK")
-		browser:EndLoad()
+		browser:EndDirLoad()
 		return
 	end
 	
@@ -268,6 +282,7 @@ function ZB.ReceivedChunk(transferID, data, size)
 	
 	if transfer.offset == transfer.size then
 		ZB.EndReceive(transferID)
+		ZB.ChatText("Transfer complete (ID = " .. transferID .. ")")
 	end
 end
 
@@ -277,10 +292,19 @@ function ZB.EndReceive(transferID)
 	transfer.handle:Close()
 	
 	ZB.Transfers[transferID] = nil
-	ZB.ChatText("Transfer complete (ID = " .. transferID .. ")")
 end
 
 net.Receive("ZB_BeginFileStream", function(len)
+	local isError = net.ReadBit() == 1
+	
+	if isError then
+		local filename = net.ReadString()
+		local errorMsg = net.ReadString()
+		
+		ZB.ChatError("An error occurred downloading '" .. filename .. "'. Msg = '" .. errorMsg .. "'")
+		return
+	end
+	
 	local transferID = net.ReadUInt(16)
 	local filename = net.ReadString()
 	local size = net.ReadUInt(32)
@@ -290,6 +314,15 @@ end)
 
 net.Receive("ZB_FileData", function(len)
 	local transferID = net.ReadUInt(16)
+	local isError = net.ReadBit() == 1
+	
+	if isError then
+		local errorMsg = net.ReadString()
+		ZB.ChatError("An error occurred with transfer ID = " .. transferID .. ". Msg = '" .. errorMsg .. "'")
+		ZB.EndReceive(transferID)
+		return
+	end
+	
 	local incoming = net.ReadUInt(16)
 	local data = net.ReadData(incoming)
 	
